@@ -25,7 +25,7 @@ jobs:
   download:
     name: "📥 دانلود فایل"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: write
     steps:
@@ -38,9 +38,9 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 zip curl wget
+          sudo apt-get install -y wget zip curl pv
 
-      - name: Download and Split Files
+      - name: Download Files with wget
         run: |
           URLS="${{ github.event.inputs.urls }}"
           MODE="${{ github.event.inputs.mode }}"
@@ -55,51 +55,55 @@ jobs:
             echo "Downloading: $FILENAME"
             echo "========================================="
             
-            # دانلود فایل با aria2c و بررسی کامل
             cd temp_files
             
-            # حذف فایل قبلی اگر ناقص بوده
-            rm -f "$FILENAME" "$FILENAME.aria2"
+            # حذف فایل قبلی
+            rm -f "$FILENAME"
             
-            # دانلود با aria2c و ادامه دانلود ناقص
-            aria2c -x 16 -s 16 -k 5M \
-              --max-connection-per-server=16 \
-              --split=16 \
-              --min-split-size=5M \
-              --max-tries=10 \
-              --retry-wait=5 \
-              --timeout=60 \
-              --continue=true \
-              --allow-overwrite=true \
-              --summary-interval=5 \
-              -d . -o "$FILENAME" "$URL"
+            # دانلود با wget (قوی‌تر از aria2c برای ریدایرکت‌ها)
+            wget --no-check-certificate \
+                 --tries=10 \
+                 --retry-connrefused \
+                 --timeout=60 \
+                 --waitretry=5 \
+                 --continue \
+                 --progress=dot:giga \
+                 --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+                 -O "$FILENAME" \
+                 "$URL"
             
-            # بررسی حجم فایل دانلود شده
+            # بررسی حجم فایل
             if [ -f "$FILENAME" ]; then
-              DOWNLOADED_SIZE=$(stat -c%s "$FILENAME")
-              echo "Downloaded size: $DOWNLOADED_SIZE bytes"
+              DOWNLOADED_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo "0")
+              SIZE_MB=$((DOWNLOADED_SIZE / 1024 / 1024))
+              echo "Downloaded size: ${SIZE_MB} MB"
               
-              # منتظر میمونیم تا aria2c واقعاً تموم بشه
-              sleep 3
+              # اگر فایل خیلی کوچک بود، با curl دوباره تلاش کن
+              if [ $DOWNLOADED_SIZE -lt 5000000 ]; then
+                echo "File too small, retrying with curl..."
+                curl -L --max-time 3600 --retry 10 --retry-delay 5 \
+                  -A "Mozilla/5.0" \
+                  -o "$FILENAME" \
+                  "$URL"
+                
+                DOWNLOADED_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo "0")
+                SIZE_MB=$((DOWNLOADED_SIZE / 1024 / 1024))
+                echo "New size: ${SIZE_MB} MB"
+              fi
             else
-              echo "Download failed! Trying with wget..."
-              wget -O "$FILENAME" "$URL"
+              echo "Download failed!"
+              exit 1
             fi
             
             cd ..
             
-            # بررسی نهایی حجم فایل
-            if [ -f "temp_files/$FILENAME" ]; then
-              FILE_SIZE=$(stat -c%s "temp_files/$FILENAME")
-              SIZE_MB=$((FILE_SIZE / 1024 / 1024))
-              echo "Final file size: ${SIZE_MB} MB"
-              
-              if [ $FILE_SIZE -lt 1000000 ]; then
-                echo "ERROR: File too small, download may have failed!"
-                exit 1
-              fi
-            else
-              echo "ERROR: File not found after download!"
+            # دریافت حجم نهایی
+            FILE_SIZE=$(stat -c%s "temp_files/$FILENAME" 2>/dev/null || echo "0")
+            SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+            echo "Final file size: ${SIZE_MB} MB"
+            
+            if [ $FILE_SIZE -lt 1000000 ]; then
+              echo "ERROR: Download failed - file too small (${SIZE_MB} MB)"
               exit 1
             fi
             
@@ -138,40 +142,47 @@ jobs:
               fi
             fi
             
-            # پاکسازی
             rm -f temp_files/*
+            echo "✅ $FILENAME processed successfully"
           done
           
           rm -rf temp_files
           echo "========================================="
-          echo "✅ Download completed!"
+          echo "✅ All downloads completed!"
           echo "========================================="
 
-      - name: List downloaded files
+      - name: Verify downloads
         run: |
           echo ""
-          echo "Files in downloads folder:"
-          ls -lh downloads/
-          echo ""
+          echo "========================================="
+          echo "Verifying downloaded files..."
+          echo "========================================="
           
-          # نمایش حجم کل
           TOTAL_SIZE=0
+          FILE_COUNT=0
+          
           for FILE in downloads/*; do
-            if [ -f "$FILE" ]; then
+            if [ -f "$FILE" ] && [ "$(basename "$FILE")" != "README.md" ]; then
               SIZE=$(stat -c%s "$FILE")
+              SIZE_MB=$((SIZE / 1024 / 1024))
+              echo "- $(basename "$FILE"): ${SIZE_MB} MB"
               TOTAL_SIZE=$((TOTAL_SIZE + SIZE))
+              FILE_COUNT=$((FILE_COUNT + 1))
             fi
           done
+          
           TOTAL_MB=$((TOTAL_SIZE / 1024 / 1024))
-          echo "Total size: ${TOTAL_MB} MB"
+          echo ""
+          echo "Total: $FILE_COUNT files, ${TOTAL_MB} MB"
+          echo "========================================="
 
       - name: Create README files
         run: |
           # ساخت README برای پوشه downloads
           echo "# Downloaded Files" > downloads/README.md
           echo "" >> downloads/README.md
-          echo "| # | File | Size | Link |" >> downloads/README.md
-          echo "|---|------|------|------|" >> downloads/README.md
+          echo "| # | File | Size (MB) | Link |" >> downloads/README.md
+          echo "|---|------|-----------|------|" >> downloads/README.md
           
           COUNTER=1
           for FILE in downloads/*; do
@@ -179,13 +190,13 @@ jobs:
               BASENAME=$(basename "$FILE")
               SIZE=$(stat -c%s "$FILE")
               SIZE_MB=$((SIZE / 1024 / 1024))
-              echo "| $COUNTER | \`$BASENAME\` | ${SIZE_MB} MB | [Download](./$BASENAME) |" >> downloads/README.md
+              echo "| $COUNTER | \`$BASENAME\` | $SIZE_MB | [Download](./$BASENAME) |" >> downloads/README.md
               COUNTER=$((COUNTER + 1))
             fi
           done
           
           # آپدیت README اصلی
-          if ! grep -q "Downloaded Files" README.md; then
+          if ! grep -q "Downloaded Files" README.md 2>/dev/null; then
             echo "" >> README.md
             echo "---" >> README.md
             echo "## Downloaded Files" >> README.md
@@ -209,7 +220,7 @@ jobs:
               else
                 echo "⚠️ Retry $i/3..."
                 sleep 5
-                git pull origin "${GITHUB_REF_NAME}" --rebase
+                git pull origin "${GITHUB_REF_NAME}" --rebase || true
               fi
             done
           else
