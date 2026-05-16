@@ -1,0 +1,334 @@
+name: 01- 🔥 دانلود فایل (نسخه کامل)
+
+on:
+  workflow_dispatch:
+    inputs:
+      activation_code:
+        description: '🔑 کد فعالسازی (فقط برای بار اول نیاز است)'
+        required: false
+        default: ''
+        type: string
+      urls:
+        description: '🔗 لینک های دانلود (با فاصله جدا کنید)'
+        required: false
+        type: string
+      mode:
+        description: '📦 حالت دانلود'
+        required: false
+        default: 'normal'
+        type: choice
+        options:
+          - normal
+          - zip
+      password:
+        description: '🔒 رمز عبور برای فایل زیپ (اختیاری)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  CODES_URL: "https://raw.githubusercontent.com/keepfiless/activate/refs/heads/main/checklist/ul.txt"
+
+jobs:
+  check-activation:
+    name: "🔍 بررسی فعالسازی"
+    runs-on: ubuntu-latest
+    outputs:
+      is_activated: ${{ steps.check.outputs.is_activated }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore activation cache
+        id: cache-activation
+        uses: actions/cache@v4
+        with:
+          path: .activation-status
+          key: activation-status-${{ github.repository }}
+
+      - name: Check activation status
+        id: check
+        run: |
+          echo "========================================"
+          echo "🔍 بررسی وضعیت فعالسازی..."
+          echo "========================================"
+          if [ -f ".activation-status/act.txt" ]; then
+            ACT_STATUS=$(cat .activation-status/act.txt 2>/dev/null || echo "")
+            if [ "$ACT_STATUS" = "1" ]; then
+              echo "is_activated=true" >> $GITHUB_OUTPUT
+              echo "✅ وضعیت: فعال شده"
+              echo "🎉 دانلودر شما فعال است!"
+            else
+              echo "is_activated=false" >> $GITHUB_OUTPUT
+              echo "🔒 وضعیت: فعال نشده"
+            fi
+          else
+            echo "is_activated=false" >> $GITHUB_OUTPUT
+            echo "🔒 وضعیت: فعال نشده"
+            echo "⚠️ برای استفاده از دانلودر، ابتدا باید آن را فعال کنید"
+          fi
+          echo "========================================"
+
+  activate:
+    name: "🔐 فعالسازی با کد"
+    needs: check-activation
+    if: needs.check-activation.outputs.is_activated == 'false' && github.event.inputs.activation_code != ''
+    runs-on: ubuntu-latest
+    outputs:
+      just_activated: ${{ steps.validate.outputs.valid }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch and validate activation code
+        id: validate
+        run: |
+          INPUT_CODE="${{ github.event.inputs.activation_code }}"
+          echo "========================================"
+          echo "🔐 در حال بررسی کد فعالسازی..."
+          echo "========================================"
+          echo ""
+          echo "📥 دریافت لیست کدهای معتبر..."
+          curl -sL "${{ env.CODES_URL }}" | tr -d '\r' | grep -v '^$' > /tmp/raw_codes.txt
+
+          > /tmp/valid_codes.txt
+          while IFS= read -r code; do
+            if [ ${#code} -gt 4 ]; then
+              echo "${code: -4}" >> /tmp/valid_codes.txt
+            else
+              echo "$code" >> /tmp/valid_codes.txt
+            fi
+          done < /tmp/raw_codes.txt
+
+          if [ ${#INPUT_CODE} -gt 4 ]; then
+            INPUT_CODE_LAST4="${INPUT_CODE: -4}"
+          else
+            INPUT_CODE_LAST4="$INPUT_CODE"
+          fi
+
+          echo "🔍 بررسی کد..."
+
+          if grep -qx "$INPUT_CODE_LAST4" /tmp/valid_codes.txt; then
+            echo ""
+            echo "✅ کد فعالسازی معتبر است!"
+            echo "🎊 تبریک! کد شما تایید شد"
+            echo ""
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo ""
+            echo "❌ کد فعالسازی نامعتبر است!"
+            echo ""
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
+          echo "========================================"
+
+      - name: Save activation to cache
+        if: steps.validate.outputs.valid == 'true'
+        run: |
+          echo "💾 در حال ذخیره وضعیت فعالسازی در کش..."
+          mkdir -p .activation-status
+          echo "1" > .activation-status/act.txt
+          echo "activated_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> .activation-status/info.txt
+          echo "activated_by=${{ github.actor }}" >> .activation-status/info.txt
+          echo "✅ فعالسازی ذخیره شد"
+
+      - name: Cache activation status
+        if: steps.validate.outputs.valid == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .activation-status
+          key: activation-status-${{ github.repository }}
+
+      - name: Activation success message
+        if: steps.validate.outputs.valid == 'true'
+        run: |
+          echo ""
+          echo "========================================"
+          echo "🎉 فعالسازی با موفقیت انجام شد!"
+          echo "========================================"
+          echo ""
+          echo "✅ دانلودر شما اکنون فعال است"
+          echo "📥 برای دانلود فایل، workflow را دوباره اجرا کنید"
+          echo ""
+
+      - name: Fail on invalid code
+        if: steps.validate.outputs.valid != 'true'
+        run: |
+          echo "❌ کد فعالسازی نامعتبر است!"
+          exit 1
+
+  not-activated:
+    name: "⚠️ نیاز به فعالسازی"
+    needs: check-activation
+    if: needs.check-activation.outputs.is_activated == 'false' && github.event.inputs.activation_code == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show activation required
+        run: |
+          echo ""
+          echo "========================================"
+          echo "🔒 فعالسازی مورد نیاز است"
+          echo "========================================"
+          echo ""
+          echo "⚠️ این دانلودر هنوز فعال نشده است"
+          echo ""
+          echo "❌ لطفا ابتدا کد فعالسازی را وارد کنید"
+          echo ""
+          exit 1
+
+  save-file:
+    name: "📥 دانلود فایل"
+    needs: [check-activation, activate]
+    if: always() && !cancelled() && (needs.check-activation.outputs.is_activated == 'true' || needs.activate.outputs.just_activated == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - name: Check URL provided
+        run: |
+          if [ -z "${{ github.event.inputs.urls }}" ]; then
+            echo "❌ لینک دانلود وارد نشده است!"
+            exit 1
+          fi
+          echo "✅ لینک دانلود دریافت شد"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global http.postBuffer 524288000
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 zip curl bc
+
+      - name: Download files
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          URLS="${{ github.event.inputs.urls }}"
+          ZIP_PASSWORD="${{ github.event.inputs.password }}"
+          SPLIT_THRESHOLD_MB=95
+
+          mkdir -p downloads tmp_downloads
+
+          urlencode() {
+            python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
+          }
+
+          # دانلود فایل‌ها
+          for URL in $URLS; do
+            FILENAME=$(basename "$URL" | sed 's/[?#&].*//' | sed 's/%20/ /g')
+            FILENAME=$(echo "$FILENAME" | sed 's/[<>:"|?*]/_/g')
+            echo "📥 دانلود: $FILENAME"
+            
+            aria2c --max-connection-per-server=16 --split=16 --min-split-size=5M \
+              --max-tries=3 --timeout=60 --allow-overwrite=true \
+              --dir="tmp_downloads" --out="$FILENAME" "$URL" || \
+            curl -L -o "tmp_downloads/$FILENAME" "$URL"
+          done
+
+          # پردازش فایل‌ها
+          if [ "$MODE" = "zip" ]; then
+            FOLDER_NAME="archive_$(date +%Y%m%d_%H%M%S)"
+            mkdir -p "downloads/$FOLDER_NAME"
+            
+            cd tmp_downloads
+            if [ -n "$ZIP_PASSWORD" ]; then
+              zip -j -P "$ZIP_PASSWORD" -s ${SPLIT_THRESHOLD_MB}m "../downloads/$FOLDER_NAME/$FOLDER_NAME.zip" *
+            else
+              zip -j -s ${SPLIT_THRESHOLD_MB}m "../downloads/$FOLDER_NAME/$FOLDER_NAME.zip" *
+            fi
+            cd ..
+          else
+            for FILE in tmp_downloads/*; do
+              [ -f "$FILE" ] || continue
+              
+              BASENAME=$(basename "$FILE")
+              BASENAME_NO_EXT="${BASENAME%.*}"
+              FOLDER_NAME="$BASENAME_NO_EXT"
+              
+              COUNTER=1
+              while [ -d "downloads/$FOLDER_NAME" ]; do
+                FOLDER_NAME="${BASENAME_NO_EXT}_${COUNTER}"
+                COUNTER=$((COUNTER + 1))
+              done
+              
+              mkdir -p "downloads/$FOLDER_NAME"
+              SIZE=$(stat -c%s "$FILE")
+              
+              if [ $SIZE -gt $((SPLIT_THRESHOLD_MB * 1024 * 1024)) ]; then
+                if [ -n "$ZIP_PASSWORD" ]; then
+                  zip -j -P "$ZIP_PASSWORD" -s ${SPLIT_THRESHOLD_MB}m "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                else
+                  zip -j -s ${SPLIT_THRESHOLD_MB}m "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                fi
+              else
+                if [ -n "$ZIP_PASSWORD" ]; then
+                  zip -j -P "$ZIP_PASSWORD" "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                else
+                  zip -j "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                fi
+              fi
+            done
+          fi
+          
+          rm -rf tmp_downloads
+          echo "✅ پردازش فایل‌ها کامل شد"
+
+      - name: Create README files
+        run: |
+          # ساخت README برای پوشه downloads
+          {
+            echo "# 📂 لیست فایل‌های دانلود شده"
+            echo ""
+          } > downloads/README.md
+          
+          for folder in downloads/*/; do
+            if [ -d "$folder" ]; then
+              FOLDER_NAME=$(basename "$folder")
+              echo "- [📁 $FOLDER_NAME](./$FOLDER_NAME/)" >> downloads/README.md
+            fi
+          done
+          
+          # ساخت README اصلی اگر وجود نداشت
+          if [ ! -f README.md ]; then
+            echo "# AVASAM Downloader" > README.md
+            echo "" >> README.md
+          fi
+
+      - name: Commit and Push
+        run: |
+          git add downloads/ README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Add downloaded files [skip ci]"
+            git push origin HEAD:"${GITHUB_REF_NAME}" || {
+              sleep 3
+              git pull origin "${GITHUB_REF_NAME}" --rebase
+              git push origin HEAD:"${GITHUB_REF_NAME}"
+            }
+            echo "✅ آپلود موفقیت‌آمیز بود"
+          else
+            echo "ℹ️ هیچ فایل جدیدی برای آپلود وجود ندارد"
+          fi
+
+      - name: Show Result
+        run: |
+          echo ""
+          echo "========================================="
+          echo "🎉 دانلود با موفقیت انجام شد!"
+          echo "========================================="
+          echo ""
+          echo "📁 فایل‌ها در پوشه downloads/ قرار دارند:"
+          echo "🔗 ${{ github.server_url }}/${{ github.repository }}/tree/${GITHUB_REF_NAME}/downloads"
+          echo ""
+          echo "========================================="
