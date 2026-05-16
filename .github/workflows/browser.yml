@@ -1,406 +1,240 @@
-name: 🚀 دانلودر حرفه‌ای فایل (نسخه کامل)
+name: 01- 🔥 دانلود فایل (نسخه کامل)
 
 on:
   workflow_dispatch:
     inputs:
       urls:
-        description: '🔗 لینک‌های دانلود (هر لینک در یک خط جداگانه)'
+        description: '🔗 لینک های دانلود (با فاصله جدا کنید)'
         required: true
         type: string
       mode:
-        description: '📦 حالت خروجی'
+        description: '📦 حالت دانلود'
         required: false
-        default: 'zip'
+        default: 'normal'
         type: choice
         options:
-          - normal (فایل اصلی)
-          - zip (فشرده با قابلیت تقسیم)
+          - normal
+          - zip
       password:
-        description: '🔒 رمز فایل زیپ (اختیاری)'
+        description: '🔒 رمز عبور برای فایل زیپ (اختیاری)'
         required: false
-        type: string
-      split_size:
-        description: '📏 حجم هر قسمت (MB) - برای فایل‌های بزرگ'
-        required: false
-        default: '95'
+        default: ''
         type: string
 
 jobs:
   download:
-    name: 📥 دانلود و آپلود فایل‌ها
+    name: "📥 دانلود فایل"
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
     permissions:
       contents: write
     steps:
-      - name: 📂 دریافت کد ریپازیتوری
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: ⚙️ تنظیمات اولیه
+      - name: Install tools
         run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 zip curl bc
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global http.postBuffer 524288000
-          sudo apt-get update
-          sudo apt-get install -y aria2 zip curl bc
 
-      - name: 📝 پردازش لینک‌ها
-        id: process
+      - name: Check URL provided
         run: |
-          # آماده‌سازی پوشه‌ها
-          mkdir -p downloads temp_download
-          BACKUP_DIR="/tmp/download_$(date +%s)"
-          mkdir -p "$BACKUP_DIR"
-          echo "BACKUP_DIR=$BACKUP_DIR" >> $GITHUB_ENV
-
-          # پارامترها
-          MODE="${{ github.event.inputs.mode }}"
-          PASSWORD="${{ github.event.inputs.password }}"
-          SPLIT_SIZE="${{ github.event.inputs.split_size }}"
-          REPO_OWNER="${{ github.repository_owner }}"
-          REPO_NAME="${{ github.event.repository.name }}"
-          BRANCH="${GITHUB_REF_NAME}"
-
-          # تابع URL encode
-          urlencode() {
-            python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
-          }
-
-          # تابع دانلود با ریتری
-          download_file() {
-            local URL="$1"
-            local FILENAME="$2"
-            local MAX_RETRIES=3
-            
-            for ((i=1; i<=MAX_RETRIES; i++)); do
-              echo "تلاش $i از $MAX_RETRIES برای دانلود $FILENAME"
-              
-              if aria2c --summary-interval=0 \
-                --max-connection-per-server=16 \
-                --split=16 \
-                --min-split-size=5M \
-                --max-tries=5 \
-                --retry-wait=5 \
-                --timeout=60 \
-                --allow-overwrite=true \
-                --dir="temp_download" \
-                --out="$FILENAME" \
-                "$URL" 2>&1; then
-                
-                if [ -f "temp_download/$FILENAME" ] && [ -s "temp_download/$FILENAME" ]; then
-                  echo "✅ دانلود موفق: $FILENAME"
-                  return 0
-                fi
-              fi
-              
-              sleep $((i * 5))
-            done
-            
-            echo "❌ دانلود ناموفق: $FILENAME"
-            return 1
-          }
-
-          # تابع ایجاد فایل README برای پوشه
-          create_readme() {
-            local FOLDER_PATH="$1"
-            local FOLDER_NAME="$2"
-            local FILE_LIST="$3"
-            
-            cat > "$FOLDER_PATH/README.md" << EOF
-# 📦 $FOLDER_NAME
-
-## اطلاعات دانلود
-- **تاریخ:** $(date '+%Y-%m-%d %H:%M:%S')
-- **تعداد فایل‌ها:** $(echo "$FILE_LIST" | wc -l)
-
-## لینک‌های دانلود
-
-$(echo "$FILE_LIST" | while read -r file; do
-  [ -n "$file" ] && echo "- [\`$file\`]($(urlencode "$file"))"
-done)
-
----
-*توسط [دانلودر خودکار](https://github.com) تولید شده است*
-EOF
-          }
-
-          # خواندن لینک‌ها
-          URLS=$(echo "${{ github.event.inputs.urls }}" | sed 's/\r//g')
-          SUCCESS_FILES=()
-          FAILED_FILES=()
-
-          echo "========================================="
-          echo "شروع دانلود فایل‌ها..."
-          echo "========================================="
-
-          # دانلود هر لینک
-          while IFS= read -r URL; do
-            [ -z "$URL" ] && continue
-            
-            # استخراج نام فایل
-            FILENAME=$(basename "$URL" | sed 's/[?#&].*//' | sed 's/%20/ /g')
-            [ -z "$FILENAME" ] && FILENAME="file_$(date +%s).bin"
-            
-            # حذف کاراکترهای غیرمجاز
-            FILENAME=$(echo "$FILENAME" | sed 's/[<>:"|?*\/\\]/_/g')
-            
-            echo ""
-            echo "🔗 لینک: $URL"
-            echo "📄 فایل: $FILENAME"
-            
-            if download_file "$URL" "$FILENAME"; then
-              SUCCESS_FILES+=("$FILENAME")
-            else
-              FAILED_FILES+=("$FILENAME")
-            fi
-          done <<< "$URLS"
-
-          # گزارش نهایی دانلود
-          echo ""
-          echo "========================================="
-          echo "📊 گزارش دانلود:"
-          echo "✅ موفق: ${#SUCCESS_FILES[@]} فایل"
-          echo "❌ ناموفق: ${#FAILED_FILES[@]} فایل"
-          echo "========================================="
-
-          if [ ${#SUCCESS_FILES[@]} -eq 0 ]; then
-            echo "❌ هیچ فایلی دانلود نشد!"
+          if [ -z "${{ github.event.inputs.urls }}" ]; then
+            echo "❌ لینک دانلود وارد نشده است!"
             exit 1
           fi
+          echo "✅ لینک دانلود دریافت شد"
 
-          echo "SUCCESS_FILES=${#SUCCESS_FILES[@]}" >> $GITHUB_ENV
-          echo "BACKUP_DIR=$BACKUP_DIR" >> $GITHUB_ENV
-
-      - name: 📦 پردازش فایل‌ها (normal یا zip)
+      - name: Download and Process Files
         run: |
           MODE="${{ github.event.inputs.mode }}"
+          URLS="${{ github.event.inputs.urls }}"
           PASSWORD="${{ github.event.inputs.password }}"
-          SPLIT_SIZE="${{ github.event.inputs.split_size }}"
-          BACKUP_DIR="${{ env.BACKUP_DIR }}"
-          
-          SPLIT_BYTES=$((SPLIT_SIZE * 1024 * 1024))
+          SPLIT_SIZE=95
+
+          mkdir -p downloads temp_download
           
           urlencode() {
             python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
           }
 
-          get_unique_name() {
-            local BASE="$1"
-            local COUNTER=1
-            local NEW_NAME="$BASE"
-            while [ -d "$BACKUP_DIR/$NEW_NAME" ]; do
-              NEW_NAME="${BASE}_${COUNTER}"
-              COUNTER=$((COUNTER + 1))
-            done
-            echo "$NEW_NAME"
-          }
+          # دانلود فایل‌ها
+          for URL in $URLS; do
+            FILENAME=$(basename "$URL" | sed 's/[?#&].*//' | sed 's/%20/ /g')
+            FILENAME=$(echo "$FILENAME" | sed 's/[<>:"|?*]/_/g')
+            
+            echo "📥 دانلود: $FILENAME"
+            
+            aria2c --max-connection-per-server=16 \
+                   --split=16 \
+                   --min-split-size=5M \
+                   --max-tries=3 \
+                   --retry-wait=5 \
+                   --timeout=60 \
+                   --allow-overwrite=true \
+                   --dir="temp_download" \
+                   --out="$FILENAME" \
+                   "$URL" || curl -L -o "temp_download/$FILENAME" "$URL"
+          done
 
-          cd temp_download
-          
-          if [ "$MODE" = "normal" ]; then
-            # حالت عادی - هر فایل جداگانه
-            for FILE in *; do
-              [ -f "$FILE" ] || continue
-              
-              SIZE=$(stat -c%s "$FILE")
-              NAME_NO_EXT="${FILE%.*}"
-              FOLDER_NAME=$(get_unique_name "$NAME_NO_EXT")
-              mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
-              
-              if [ $SIZE -gt $SPLIT_BYTES ]; then
-                echo "📦 فایل بزرگ: تقسیم $FILE به قطعات ${SPLIT_SIZE}MB"
-                
-                # ساخت فایل زیپ تقسیم شده
-                if [ -n "$PASSWORD" ]; then
-                  zip -j -P "$PASSWORD" -s ${SPLIT_SIZE}m \
-                    "$BACKUP_DIR/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
-                else
-                  zip -j -s ${SPLIT_SIZE}m \
-                    "$BACKUP_DIR/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
-                fi
-                
-                # ساخت لینک‌های دانلود برای README
-                {
-                  echo "# $FILE"
-                  echo ""
-                  echo "## فایل تقسیم شده به ${SPLIT_SIZE}MB"
-                  echo ""
-                  echo "| قسمت | فایل | لینک دانلود |"
-                  echo "|------|------|--------------|"
-                  
-                  for PART in $(ls "$BACKUP_DIR/$FOLDER_NAME/"*.zip "$BACKUP_DIR/$FOLDER_NAME/"*.z* 2>/dev/null | sort -V); do
-                    PART_NAME=$(basename "$PART")
-                    PART_ENCODED=$(urlencode "$PART_NAME")
-                    echo "| - | \`$PART_NAME\` | [دانلود](${{ github.server_url }}/${{ github.repository }}/raw/${GITHUB_REF_NAME}/downloads/${FOLDER_NAME}/$PART_ENCODED) |"
-                  done
-                } > "$BACKUP_DIR/$FOLDER_NAME/README.md"
-                
-              else
-                # فایل کوچک - زیپ ساده
-                if [ -n "$PASSWORD" ]; then
-                  zip -j -P "$PASSWORD" \
-                    "$BACKUP_DIR/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
-                else
-                  zip -j \
-                    "$BACKUP_DIR/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
-                fi
-                
-                SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
-                FILE_ENCODED=$(urlencode "$FOLDER_NAME.zip")
-                RAW_LINK="${{ github.server_url }}/${{ github.repository }}/raw/${GITHUB_REF_NAME}/downloads/${FOLDER_NAME}/$FILE_ENCODED"
-                
-                cat > "$BACKUP_DIR/$FOLDER_NAME/README.md" << EOF
-# $FILE
+          # پردازش فایل‌ها
+          if [ "$MODE" = "zip" ]; then
+            # حالت زیپ - همه فایل‌ها با هم
+            FOLDER_NAME="archive_$(date +%Y%m%d_%H%M%S)"
+            mkdir -p "downloads/$FOLDER_NAME"
+            
+            cd temp_download
+            if [ -n "$PASSWORD" ]; then
+              zip -j -P "$PASSWORD" -s ${SPLIT_SIZE}m "../downloads/$FOLDER_NAME/$FOLDER_NAME.zip" *
+            else
+              zip -j -s ${SPLIT_SIZE}m "../downloads/$FOLDER_NAME/$FOLDER_NAME.zip" *
+            fi
+            cd ..
+            
+            # ساخت README
+            cat > "downloads/$FOLDER_NAME/README.md" << EOF
+# آرشیو دانلود
 
-## اطلاعات
-- **حجم:** ${SIZE_MB} MB
-- **رمز:** $( [ -n "$PASSWORD" ] && echo "دارد" || echo "ندارد" )
+تاریخ: $(date '+%Y-%m-%d %H:%M:%S')
 
-## لینک دانلود
-[دانلود فایل]($RAW_LINK)
+## فایل‌های آرشیو:
+$(for f in temp_download/*; do [ -f "$f" ] && echo "- $(basename "$f")"; done)
 
----
-*توسط دانلودر خودکار*
+## لینک‌های دانلود:
 EOF
-              fi
+            for PART in $(ls "downloads/$FOLDER_NAME/"*.zip "downloads/$FOLDER_NAME/"*.z* 2>/dev/null | sort); do
+              PART_NAME=$(basename "$PART")
+              PART_ENCODED=$(urlencode "$PART_NAME")
+              echo "- [$PART_NAME](https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/downloads/$FOLDER_NAME/$PART_ENCODED)" >> "downloads/$FOLDER_NAME/README.md"
             done
             
           else
-            # حالت زیپ - همه فایل‌ها در یک آرشیو
-            ARCHIVE_NAME="archive_$(date +%Y%m%d_%H%M%S)"
-            FOLDER_NAME=$(get_unique_name "$ARCHIVE_NAME")
-            mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
-            
-            FILE_ARRAY=()
-            for FILE in *; do
-              [ -f "$FILE" ] && FILE_ARRAY+=("$FILE")
-            done
-            
-            if [ ${#FILE_ARRAY[@]} -gt 0 ]; then
-              if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" -s ${SPLIT_SIZE}m \
-                  "$BACKUP_DIR/$FOLDER_NAME/$ARCHIVE_NAME.zip" "${FILE_ARRAY[@]}"
+            # حالت normal - هر فایل جداگانه
+            for FILE in temp_download/*; do
+              [ -f "$FILE" ] || continue
+              
+              BASENAME=$(basename "$FILE")
+              BASENAME_NO_EXT="${BASENAME%.*}"
+              FOLDER_NAME="$BASENAME_NO_EXT"
+              
+              # اطمینان از یکتا بودن نام پوشه
+              COUNTER=1
+              while [ -d "downloads/$FOLDER_NAME" ]; do
+                FOLDER_NAME="${BASENAME_NO_EXT}_${COUNTER}"
+                COUNTER=$((COUNTER + 1))
+              done
+              
+              mkdir -p "downloads/$FOLDER_NAME"
+              SIZE=$(stat -c%s "$FILE")
+              
+              if [ $SIZE -gt $((SPLIT_SIZE * 1024 * 1024)) ]; then
+                # فایل بزرگ - تقسیم شود
+                if [ -n "$PASSWORD" ]; then
+                  zip -j -P "$PASSWORD" -s ${SPLIT_SIZE}m "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                else
+                  zip -j -s ${SPLIT_SIZE}m "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                fi
               else
-                zip -j -s ${SPLIT_SIZE}m \
-                  "$BACKUP_DIR/$FOLDER_NAME/$ARCHIVE_NAME.zip" "${FILE_ARRAY[@]}"
+                # فایل کوچک
+                if [ -n "$PASSWORD" ]; then
+                  zip -j -P "$PASSWORD" "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                else
+                  zip -j "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
+                fi
               fi
               
-              # ساخت README برای آرشیو
-              {
-                echo "# $ARCHIVE_NAME"
-                echo ""
-                echo "## آرشیو شامل ${#FILE_ARRAY[@]} فایل"
-                echo ""
-                echo "| قسمت | فایل | لینک دانلود |"
-                echo "|------|------|--------------|"
-                
-                for PART in $(ls "$BACKUP_DIR/$FOLDER_NAME/"*.zip "$BACKUP_DIR/$FOLDER_NAME/"*.z* 2>/dev/null | sort -V); do
+              # ساخت README
+              SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+              cat > "downloads/$FOLDER_NAME/README.md" << EOF
+# $BASENAME
+
+- حجم اصلی: ${SIZE_MB} MB
+- تاریخ: $(date '+%Y-%m-%d %H:%M:%S')
+- رمز: $( [ -n "$PASSWORD" ] && echo "دارد" || echo "ندارد" )
+
+## لینک دانلود:
+EOF
+              if [ -f "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" ]; then
+                FILE_ENCODED=$(urlencode "$FOLDER_NAME.zip")
+                echo "[دانلود فایل](https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/downloads/$FOLDER_NAME/$FILE_ENCODED)" >> "downloads/$FOLDER_NAME/README.md"
+              else
+                for PART in $(ls "downloads/$FOLDER_NAME/"*.zip "downloads/$FOLDER_NAME/"*.z* 2>/dev/null | sort); do
                   PART_NAME=$(basename "$PART")
                   PART_ENCODED=$(urlencode "$PART_NAME")
-                  echo "| - | \`$PART_NAME\` | [دانلود](${{ github.server_url }}/${{ github.repository }}/raw/${GITHUB_REF_NAME}/downloads/${FOLDER_NAME}/$PART_ENCODED) |"
+                  echo "- [$PART_NAME](https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/downloads/$FOLDER_NAME/$PART_ENCODED)" >> "downloads/$FOLDER_NAME/README.md"
                 done
-              } > "$BACKUP_DIR/$FOLDER_NAME/README.md"
-            fi
+              fi
+            done
           fi
+          
+          rm -rf temp_download
+          echo "✅ پردازش فایل‌ها کامل شد"
 
-      - name: 📤 آپلود فایل‌ها به ریپازیتوری
+      - name: Update Main README
         run: |
-          BACKUP_DIR="${{ env.BACKUP_DIR }}"
-          BRANCH="${GITHUB_REF_NAME}"
-          
-          if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A $BACKUP_DIR 2>/dev/null)" ]; then
-            echo "⚠️ چیزی برای آپلود وجود ندارد"
-            exit 0
-          fi
-          
-          # همگام‌سازی با ریپازیتوری
-          git fetch origin "$BRANCH"
-          git reset --hard origin/"$BRANCH" 2>/dev/null || true
-          
-          # کپی فایل‌ها
-          mkdir -p downloads
-          cp -r "$BACKUP_DIR"/* downloads/
-          
-          # ساخت فهرست اصلی دانلودها
+          # ساخت لیست دانلودها در README اصلی
           cat > downloads/README.md << 'EOF'
-# 📂 فایل‌های دانلود شده
-
-## لیست پوشه‌ها
+# 📂 لیست فایل‌های دانلود شده
 
 EOF
           
           for folder in downloads/*/; do
-            if [ -d "$folder" ] && [ -f "$folder/README.md" ]; then
+            if [ -d "$folder" ]; then
               FOLDER_NAME=$(basename "$folder")
               echo "- [📁 $FOLDER_NAME](./$FOLDER_NAME/)" >> downloads/README.md
             fi
           done
           
-          echo "" >> downloads/README.md
-          echo "---" >> downloads/README.md
-          echo "*تاریخ بروزرسانی: $(date '+%Y-%m-%d %H:%M:%S')*" >> downloads/README.md
-          
-          # اضافه کردن لینک به README اصلی
-          if ! grep -q "فایل‌های دانلود شده" README.md 2>/dev/null; then
-            cat >> README.md << 'EOF'
-
----
-## 📦 فایل‌های دانلود شده
-
-برای مشاهده فایل‌های دانلود شده به پوشه [`downloads/`](./downloads/) مراجعه کنید.
-
-[📂 مشاهده همه فایل‌ها](./downloads/)
-
-EOF
+          # به‌روزرسانی README اصلی پروژه
+          if ! grep -q "فایل های دانلود شده در گیتهاب شما" README.md 2>/dev/null; then
+            echo "" >> README.md
+            echo "---" >> README.md
+            echo "" >> README.md
+            echo "## فایل های دانلود شده در گیتهاب شما :" >> README.md
+            echo "" >> README.md
+            echo "برای مشاهده فایل‌های دانلود شده به پوشه [\`downloads/\`](./downloads/) مراجعه کنید." >> README.md
+            echo "" >> README.md
           fi
-          
-          # آپلود تدریجی فایل‌ها
-          echo "🔄 شروع آپلود فایل‌ها..."
-          
-          # آپلود پوشه‌ها به صورت جداگانه
-          for folder in downloads/*/; do
-            if [ -d "$folder" ]; then
-              echo "📤 آپلود: $(basename "$folder")"
-              git add "$folder" 2>/dev/null || true
-              
-              # هر ۵ ثانیه یک بار commit کن
-              if ! git diff --cached --quiet; then
-                git commit -m "Add download: $(basename "$folder") [skip ci]" --quiet
-                
-                # آپلود با ریتری
-                for i in 1 2 3 4 5; do
-                  if git push origin HEAD:"$BRANCH" --quiet 2>/dev/null; then
-                    echo "  ✅ آپلود شد"
-                    break
-                  fi
-                  echo "  ⏳ تلاش مجدد $i/5..."
-                  sleep 5
-                done
-              fi
-            fi
-          done
-          
-          # آپلود README ها
-          git add downloads/README.md README.md
+
+      - name: Commit and Push
+        run: |
+          git add downloads/ README.md
           if ! git diff --cached --quiet; then
-            git commit -m "Update download list [skip ci]" --quiet
-            git push origin HEAD:"$BRANCH" --quiet || true
+            git commit -m "Add downloaded files [skip ci]"
+            
+            # تلاش برای آپلود با ریتری
+            for i in 1 2 3 4 5; do
+              if git push origin HEAD:"${GITHUB_REF_NAME}"; then
+                echo "✅ آپلود موفقیت‌آمیز بود"
+                break
+              fi
+              echo "⚠️ تلاش مجدد $i/5..."
+              sleep 5
+              git pull origin "${GITHUB_REF_NAME}" --rebase || true
+            done
+          else
+            echo "ℹ️ هیچ فایل جدیدی برای آپلود وجود ندارد"
           fi
-          
-          echo "✅ تمام فایل‌ها با موفقیت آپلود شدند"
 
-      - name: 📊 نمایش گزارش نهایی
-        if: always()
+      - name: Show Result
         run: |
           echo ""
           echo "========================================="
-          echo "🎉 فرآیند دانلود با موفقیت کامل شد!"
+          echo "🎉 دانلود با موفقیت انجام شد!"
           echo "========================================="
           echo ""
-          echo "📁 فایل‌های دانلود شده در پوشه downloads/ قرار دارند:"
+          echo "📁 فایل‌ها در پوشه downloads/ قرار دارند:"
           echo "🔗 ${{ github.server_url }}/${{ github.repository }}/tree/${GITHUB_REF_NAME}/downloads"
+          echo ""
+          
+          # نمایش لیست فایل‌ها
+          echo "📄 لیست فایل‌ها:"
+          find downloads -type f -name "*.zip" -o -name "*.z*" | head -20
           echo ""
           echo "========================================="
