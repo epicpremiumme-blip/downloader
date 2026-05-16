@@ -1,5 +1,5 @@
 # Downloaded Files
 
-| # | File | Size | Link |
-|---|------|------|------|
-| 1 | `TablePlus.dmg.zip` | 25 MB | [Download](./TablePlus.dmg.zip) |
+| # | File | Size (MB) | Link |
+|---|------|-----------|------|
+| 1 | `TablePlus.dmg.zip` | 25 | [Download](./TablePlus.dmg.zip) |
