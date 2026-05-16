@@ -40,65 +40,131 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y aria2 zip curl
 
-      - name: Download files
+      - name: Download and Split Files
         run: |
           URLS="${{ github.event.inputs.urls }}"
           MODE="${{ github.event.inputs.mode }}"
           PASSWORD="${{ github.event.inputs.password }}"
+          SPLIT_SIZE=90
           
-          mkdir -p downloads
+          mkdir -p downloads temp_files
           
           for URL in $URLS; do
             FILENAME=$(basename "$URL" | cut -d'?' -f1 | cut -d'#' -f1)
             echo "Downloading: $FILENAME"
             
-            # دانلود فایل
-            aria2c -x 16 -s 16 -k 5M --allow-overwrite=true -d . -o "$FILENAME" "$URL" || \
-            curl -L -o "$FILENAME" "$URL"
+            cd temp_files
+            aria2c -x 16 -s 16 -k 5M --allow-overwrite=true -d . -o "$FILENAME" "$URL" || curl -L -o "$FILENAME" "$URL"
+            cd ..
+            
+            FILE_SIZE=$(stat -c%s "temp_files/$FILENAME")
+            SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+            echo "File size: ${SIZE_MB} MB"
             
             if [ "$MODE" = "zip" ]; then
-              # حالت زیپ - فشرده سازی
-              if [ -n "$PASSWORD" ]; then
-                zip -P "$PASSWORD" "${FILENAME}.zip" "$FILENAME"
+              if [ $FILE_SIZE -gt $((SPLIT_SIZE * 1024 * 1024)) ]; then
+                echo "Splitting into ${SPLIT_SIZE}MB parts..."
+                cd temp_files
+                if [ -n "$PASSWORD" ]; then
+                  zip -P "$PASSWORD" -s ${SPLIT_SIZE}m "${FILENAME}.zip" "$FILENAME"
+                else
+                  zip -s ${SPLIT_SIZE}m "${FILENAME}.zip" "$FILENAME"
+                fi
+                mv "${FILENAME}.zip"* ../downloads/
+                cd ..
               else
-                zip "${FILENAME}.zip" "$FILENAME"
+                if [ -n "$PASSWORD" ]; then
+                  zip -P "$PASSWORD" "downloads/${FILENAME}.zip" "temp_files/$FILENAME"
+                else
+                  zip "downloads/${FILENAME}.zip" "temp_files/$FILENAME"
+                fi
               fi
-              mv "${FILENAME}.zip" downloads/
-              rm -f "$FILENAME"
             else
-              # حالت عادی - انتقال مستقیم
-              mv "$FILENAME" downloads/
+              if [ $FILE_SIZE -gt $((SPLIT_SIZE * 1024 * 1024)) ]; then
+                echo "File too large, splitting into ${SPLIT_SIZE}MB parts..."
+                cd temp_files
+                if [ -n "$PASSWORD" ]; then
+                  zip -P "$PASSWORD" -s ${SPLIT_SIZE}m "${FILENAME}.zip" "$FILENAME"
+                else
+                  zip -s ${SPLIT_SIZE}m "${FILENAME}.zip" "$FILENAME"
+                fi
+                mv "${FILENAME}.zip"* ../downloads/
+                cd ..
+              else
+                mv "temp_files/$FILENAME" "downloads/"
+              fi
             fi
+            
+            rm -f temp_files/*
           done
           
+          rm -rf temp_files
           echo "✅ Download completed!"
 
-      - name: Update README
+      - name: Create README files
         run: |
-          # ساخت لیست دانلودها
+          # ساخت README برای پوشه downloads
           echo "# Downloaded Files" > downloads/README.md
           echo "" >> downloads/README.md
-          echo "| File | Link |" >> downloads/README.md
-          echo "|------|------|" >> downloads/README.md
+          echo "| # | File | Size | Link |" >> downloads/README.md
+          echo "|---|------|------|------|" >> downloads/README.md
           
+          COUNTER=1
           for FILE in downloads/*; do
             if [ -f "$FILE" ]; then
               BASENAME=$(basename "$FILE")
-              echo "| $BASENAME | [Download](./$BASENAME) |" >> downloads/README.md
+              SIZE=$(stat -c%s "$FILE")
+              SIZE_MB=$((SIZE / 1024 / 1024))
+              echo "| $COUNTER | \`$BASENAME\` | ${SIZE_MB} MB | [Download](./$BASENAME) |" >> downloads/README.md
+              COUNTER=$((COUNTER + 1))
             fi
           done
           
           # آپدیت README اصلی
           echo "" >> README.md
           echo "---" >> README.md
-          echo "## 📦 Downloaded Files" >> README.md
+          echo "## Downloaded Files" >> README.md
           echo "" >> README.md
-          echo "Check [downloads folder](./downloads) for downloaded files." >> README.md
+          echo "Check the [downloads folder](./downloads) for downloaded files." >> README.md
+          echo "" >> README.md
+          echo "### How to extract split files:" >> README.md
+          echo "1. Download all parts (.zip, .z01, .z02...)" >> README.md
+          echo "2. Open the main .zip file with WinRAR or 7-Zip" >> README.md
+          echo "3. Extract normally - parts combine automatically" >> README.md
 
-      - name: Push changes
+      - name: Push to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add downloads/ README.md
-          git commit -m "Add downloaded files [skip ci]" || echo "Nothing to commit"
-          git push
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "Add downloaded files [skip ci]"
+            
+            for i in 1 2 3; do
+              if git push origin HEAD:"${GITHUB_REF_NAME}"; then
+                echo "Push successful!"
+                break
+              else
+                echo "Retry $i/3..."
+                sleep 5
+                git pull origin "${GITHUB_REF_NAME}" --rebase
+              fi
+            done
+          else
+            echo "No new files to push"
+          fi
+
+      - name: Show result
+        run: |
+          echo ""
+          echo "========================================="
+          echo "Download completed successfully!"
+          echo "========================================="
+          echo ""
+          echo "Files in downloads folder:"
+          ls -lh downloads/
+          echo ""
+          echo "View files at:"
+          echo "${{ github.server_url }}/${{ github.repository }}/tree/${GITHUB_REF_NAME}/downloads"
+          echo ""
