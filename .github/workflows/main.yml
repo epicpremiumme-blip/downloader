@@ -38,7 +38,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 zip curl
+          sudo apt-get install -y aria2 zip curl wget
 
       - name: Download and Split Files
         run: |
@@ -51,16 +51,59 @@ jobs:
           
           for URL in $URLS; do
             FILENAME=$(basename "$URL" | cut -d'?' -f1 | cut -d'#' -f1)
+            echo "========================================="
             echo "Downloading: $FILENAME"
+            echo "========================================="
             
+            # دانلود فایل با aria2c و بررسی کامل
             cd temp_files
-            aria2c -x 16 -s 16 -k 5M --allow-overwrite=true -d . -o "$FILENAME" "$URL" || curl -L -o "$FILENAME" "$URL"
+            
+            # حذف فایل قبلی اگر ناقص بوده
+            rm -f "$FILENAME" "$FILENAME.aria2"
+            
+            # دانلود با aria2c و ادامه دانلود ناقص
+            aria2c -x 16 -s 16 -k 5M \
+              --max-connection-per-server=16 \
+              --split=16 \
+              --min-split-size=5M \
+              --max-tries=10 \
+              --retry-wait=5 \
+              --timeout=60 \
+              --continue=true \
+              --allow-overwrite=true \
+              --summary-interval=5 \
+              -d . -o "$FILENAME" "$URL"
+            
+            # بررسی حجم فایل دانلود شده
+            if [ -f "$FILENAME" ]; then
+              DOWNLOADED_SIZE=$(stat -c%s "$FILENAME")
+              echo "Downloaded size: $DOWNLOADED_SIZE bytes"
+              
+              # منتظر میمونیم تا aria2c واقعاً تموم بشه
+              sleep 3
+            else
+              echo "Download failed! Trying with wget..."
+              wget -O "$FILENAME" "$URL"
+            fi
+            
             cd ..
             
-            FILE_SIZE=$(stat -c%s "temp_files/$FILENAME")
-            SIZE_MB=$((FILE_SIZE / 1024 / 1024))
-            echo "File size: ${SIZE_MB} MB"
+            # بررسی نهایی حجم فایل
+            if [ -f "temp_files/$FILENAME" ]; then
+              FILE_SIZE=$(stat -c%s "temp_files/$FILENAME")
+              SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+              echo "Final file size: ${SIZE_MB} MB"
+              
+              if [ $FILE_SIZE -lt 1000000 ]; then
+                echo "ERROR: File too small, download may have failed!"
+                exit 1
+              fi
+            else
+              echo "ERROR: File not found after download!"
+              exit 1
+            fi
             
+            # پردازش فایل
             if [ "$MODE" = "zip" ]; then
               if [ $FILE_SIZE -gt $((SPLIT_SIZE * 1024 * 1024)) ]; then
                 echo "Splitting into ${SPLIT_SIZE}MB parts..."
@@ -81,7 +124,7 @@ jobs:
               fi
             else
               if [ $FILE_SIZE -gt $((SPLIT_SIZE * 1024 * 1024)) ]; then
-                echo "File too large, splitting into ${SPLIT_SIZE}MB parts..."
+                echo "File too large (${SIZE_MB}MB), splitting into ${SPLIT_SIZE}MB parts..."
                 cd temp_files
                 if [ -n "$PASSWORD" ]; then
                   zip -P "$PASSWORD" -s ${SPLIT_SIZE}m "${FILENAME}.zip" "$FILENAME"
@@ -95,11 +138,32 @@ jobs:
               fi
             fi
             
+            # پاکسازی
             rm -f temp_files/*
           done
           
           rm -rf temp_files
+          echo "========================================="
           echo "✅ Download completed!"
+          echo "========================================="
+
+      - name: List downloaded files
+        run: |
+          echo ""
+          echo "Files in downloads folder:"
+          ls -lh downloads/
+          echo ""
+          
+          # نمایش حجم کل
+          TOTAL_SIZE=0
+          for FILE in downloads/*; do
+            if [ -f "$FILE" ]; then
+              SIZE=$(stat -c%s "$FILE")
+              TOTAL_SIZE=$((TOTAL_SIZE + SIZE))
+            fi
+          done
+          TOTAL_MB=$((TOTAL_SIZE / 1024 / 1024))
+          echo "Total size: ${TOTAL_MB} MB"
 
       - name: Create README files
         run: |
@@ -111,7 +175,7 @@ jobs:
           
           COUNTER=1
           for FILE in downloads/*; do
-            if [ -f "$FILE" ]; then
+            if [ -f "$FILE" ] && [ "$(basename "$FILE")" != "README.md" ]; then
               BASENAME=$(basename "$FILE")
               SIZE=$(stat -c%s "$FILE")
               SIZE_MB=$((SIZE / 1024 / 1024))
@@ -121,16 +185,13 @@ jobs:
           done
           
           # آپدیت README اصلی
-          echo "" >> README.md
-          echo "---" >> README.md
-          echo "## Downloaded Files" >> README.md
-          echo "" >> README.md
-          echo "Check the [downloads folder](./downloads) for downloaded files." >> README.md
-          echo "" >> README.md
-          echo "### How to extract split files:" >> README.md
-          echo "1. Download all parts (.zip, .z01, .z02...)" >> README.md
-          echo "2. Open the main .zip file with WinRAR or 7-Zip" >> README.md
-          echo "3. Extract normally - parts combine automatically" >> README.md
+          if ! grep -q "Downloaded Files" README.md; then
+            echo "" >> README.md
+            echo "---" >> README.md
+            echo "## Downloaded Files" >> README.md
+            echo "" >> README.md
+            echo "Check the [downloads folder](./downloads) for downloaded files." >> README.md
+          fi
 
       - name: Push to repository
         run: |
@@ -143,10 +204,10 @@ jobs:
             
             for i in 1 2 3; do
               if git push origin HEAD:"${GITHUB_REF_NAME}"; then
-                echo "Push successful!"
+                echo "✅ Push successful!"
                 break
               else
-                echo "Retry $i/3..."
+                echo "⚠️ Retry $i/3..."
                 sleep 5
                 git pull origin "${GITHUB_REF_NAME}" --rebase
               fi
@@ -159,12 +220,13 @@ jobs:
         run: |
           echo ""
           echo "========================================="
-          echo "Download completed successfully!"
+          echo "🎉 Download completed successfully!"
           echo "========================================="
           echo ""
-          echo "Files in downloads folder:"
+          echo "📁 Files in downloads folder:"
           ls -lh downloads/
           echo ""
-          echo "View files at:"
+          echo "🔗 View files at:"
           echo "${{ github.server_url }}/${{ github.repository }}/tree/${GITHUB_REF_NAME}/downloads"
           echo ""
+          echo "========================================="
