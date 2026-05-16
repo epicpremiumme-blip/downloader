@@ -85,7 +85,6 @@ jobs:
 
           # پردازش فایل‌ها
           if [ "$MODE" = "zip" ]; then
-            # حالت زیپ - همه فایل‌ها با هم
             FOLDER_NAME="archive_$(date +%Y%m%d_%H%M%S)"
             mkdir -p "downloads/$FOLDER_NAME"
             
@@ -98,24 +97,21 @@ jobs:
             cd ..
             
             # ساخت README
-            cat > "downloads/$FOLDER_NAME/README.md" << EOF
-# آرشیو دانلود
-
-تاریخ: $(date '+%Y-%m-%d %H:%M:%S')
-
-## فایل‌های آرشیو:
-$(for f in temp_download/*; do [ -f "$f" ] && echo "- $(basename "$f")"; done)
-
-## لینک‌های دانلود:
-EOF
+            printf "# آرشیو دانلود\n\n" > "downloads/$FOLDER_NAME/README.md"
+            printf "تاریخ: $(date '+%Y-%m-%d %H:%M:%S')\n\n" >> "downloads/$FOLDER_NAME/README.md"
+            printf "## فایل‌های آرشیو:\n" >> "downloads/$FOLDER_NAME/README.md"
+            for f in temp_download/*; do
+              [ -f "$f" ] && printf "- $(basename "$f")\n" >> "downloads/$FOLDER_NAME/README.md"
+            done
+            printf "\n## لینک‌های دانلود:\n" >> "downloads/$FOLDER_NAME/README.md"
+            
             for PART in $(ls "downloads/$FOLDER_NAME/"*.zip "downloads/$FOLDER_NAME/"*.z* 2>/dev/null | sort); do
               PART_NAME=$(basename "$PART")
               PART_ENCODED=$(urlencode "$PART_NAME")
-              echo "- [$PART_NAME](https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/downloads/$FOLDER_NAME/$PART_ENCODED)" >> "downloads/$FOLDER_NAME/README.md"
+              printf "- [%s](https://raw.githubusercontent.com/%s/${GITHUB_REF_NAME}/downloads/%s/%s)\n" "$PART_NAME" "${{ github.repository }}" "$FOLDER_NAME" "$PART_ENCODED" >> "downloads/$FOLDER_NAME/README.md"
             done
             
           else
-            # حالت normal - هر فایل جداگانه
             for FILE in temp_download/*; do
               [ -f "$FILE" ] || continue
               
@@ -123,7 +119,6 @@ EOF
               BASENAME_NO_EXT="${BASENAME%.*}"
               FOLDER_NAME="$BASENAME_NO_EXT"
               
-              # اطمینان از یکتا بودن نام پوشه
               COUNTER=1
               while [ -d "downloads/$FOLDER_NAME" ]; do
                 FOLDER_NAME="${BASENAME_NO_EXT}_${COUNTER}"
@@ -134,14 +129,12 @@ EOF
               SIZE=$(stat -c%s "$FILE")
               
               if [ $SIZE -gt $((SPLIT_SIZE * 1024 * 1024)) ]; then
-                # فایل بزرگ - تقسیم شود
                 if [ -n "$PASSWORD" ]; then
                   zip -j -P "$PASSWORD" -s ${SPLIT_SIZE}m "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
                 else
                   zip -j -s ${SPLIT_SIZE}m "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
                 fi
               else
-                # فایل کوچک
                 if [ -n "$PASSWORD" ]; then
                   zip -j -P "$PASSWORD" "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" "$FILE"
                 else
@@ -149,25 +142,27 @@ EOF
                 fi
               fi
               
-              # ساخت README
               SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
-              cat > "downloads/$FOLDER_NAME/README.md" << EOF
-# $BASENAME
-
-- حجم اصلی: ${SIZE_MB} MB
-- تاریخ: $(date '+%Y-%m-%d %H:%M:%S')
-- رمز: $( [ -n "$PASSWORD" ] && echo "دارد" || echo "ندارد" )
-
-## لینک دانلود:
-EOF
+              
+              printf "# %s\n\n" "$BASENAME" > "downloads/$FOLDER_NAME/README.md"
+              printf "- حجم اصلی: ${SIZE_MB} MB\n" >> "downloads/$FOLDER_NAME/README.md"
+              printf "- تاریخ: $(date '+%Y-%m-%d %H:%M:%S')\n" >> "downloads/$FOLDER_NAME/README.md"
+              printf "- رمز: " >> "downloads/$FOLDER_NAME/README.md"
+              if [ -n "$PASSWORD" ]; then
+                printf "دارد\n\n" >> "downloads/$FOLDER_NAME/README.md"
+              else
+                printf "ندارد\n\n" >> "downloads/$FOLDER_NAME/README.md"
+              fi
+              printf "## لینک دانلود:\n\n" >> "downloads/$FOLDER_NAME/README.md"
+              
               if [ -f "downloads/$FOLDER_NAME/$FOLDER_NAME.zip" ]; then
                 FILE_ENCODED=$(urlencode "$FOLDER_NAME.zip")
-                echo "[دانلود فایل](https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/downloads/$FOLDER_NAME/$FILE_ENCODED)" >> "downloads/$FOLDER_NAME/README.md"
+                printf "[دانلود فایل](https://raw.githubusercontent.com/%s/${GITHUB_REF_NAME}/downloads/%s/%s)\n" "${{ github.repository }}" "$FOLDER_NAME" "$FILE_ENCODED" >> "downloads/$FOLDER_NAME/README.md"
               else
                 for PART in $(ls "downloads/$FOLDER_NAME/"*.zip "downloads/$FOLDER_NAME/"*.z* 2>/dev/null | sort); do
                   PART_NAME=$(basename "$PART")
                   PART_ENCODED=$(urlencode "$PART_NAME")
-                  echo "- [$PART_NAME](https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/downloads/$FOLDER_NAME/$PART_ENCODED)" >> "downloads/$FOLDER_NAME/README.md"
+                  printf "- [%s](https://raw.githubusercontent.com/%s/${GITHUB_REF_NAME}/downloads/%s/%s)\n" "$PART_NAME" "${{ github.repository }}" "$FOLDER_NAME" "$PART_ENCODED" >> "downloads/$FOLDER_NAME/README.md"
                 done
               fi
             done
@@ -178,11 +173,11 @@ EOF
 
       - name: Update Main README
         run: |
-          # ساخت لیست دانلودها در README اصلی
-          cat > downloads/README.md << 'EOF'
-# 📂 لیست فایل‌های دانلود شده
-
-EOF
+          # ساخت فایل README برای پوشه downloads
+          {
+            echo "# 📂 لیست فایل‌های دانلود شده"
+            echo ""
+          } > downloads/README.md
           
           for folder in downloads/*/; do
             if [ -d "$folder" ]; then
@@ -191,15 +186,23 @@ EOF
             fi
           done
           
-          # به‌روزرسانی README اصلی پروژه
-          if ! grep -q "فایل های دانلود شده در گیتهاب شما" README.md 2>/dev/null; then
+          # اطمینان از وجود README اصلی
+          if [ ! -f README.md ]; then
+            echo "# Downloader" > README.md
             echo "" >> README.md
-            echo "---" >> README.md
-            echo "" >> README.md
-            echo "## فایل های دانلود شده در گیتهاب شما :" >> README.md
-            echo "" >> README.md
-            echo "برای مشاهده فایل‌های دانلود شده به پوشه [\`downloads/\`](./downloads/) مراجعه کنید." >> README.md
-            echo "" >> README.md
+          fi
+          
+          # اضافه کردن بخش دانلودها به README اصلی
+          if ! grep -q "فایل های دانلود شده در گیتهاب شما" README.md; then
+            {
+              echo ""
+              echo "---"
+              echo ""
+              echo "## فایل های دانلود شده در گیتهاب شما :"
+              echo ""
+              echo "برای مشاهده فایل‌های دانلود شده به پوشه [\`downloads/\`](./downloads/) مراجعه کنید."
+              echo ""
+            } >> README.md
           fi
 
       - name: Commit and Push
@@ -207,17 +210,13 @@ EOF
           git add downloads/ README.md
           if ! git diff --cached --quiet; then
             git commit -m "Add downloaded files [skip ci]"
-            
-            # تلاش برای آپلود با ریتری
-            for i in 1 2 3 4 5; do
-              if git push origin HEAD:"${GITHUB_REF_NAME}"; then
-                echo "✅ آپلود موفقیت‌آمیز بود"
-                break
-              fi
-              echo "⚠️ تلاش مجدد $i/5..."
+            git push origin HEAD:"${GITHUB_REF_NAME}" || {
+              echo "⚠️ پوش ناموفق، تلاش مجدد..."
               sleep 5
-              git pull origin "${GITHUB_REF_NAME}" --rebase || true
-            done
+              git pull origin "${GITHUB_REF_NAME}" --rebase
+              git push origin HEAD:"${GITHUB_REF_NAME}"
+            }
+            echo "✅ آپلود موفقیت‌آمیز بود"
           else
             echo "ℹ️ هیچ فایل جدیدی برای آپلود وجود ندارد"
           fi
@@ -232,9 +231,7 @@ EOF
           echo "📁 فایل‌ها در پوشه downloads/ قرار دارند:"
           echo "🔗 ${{ github.server_url }}/${{ github.repository }}/tree/${GITHUB_REF_NAME}/downloads"
           echo ""
-          
-          # نمایش لیست فایل‌ها
           echo "📄 لیست فایل‌ها:"
-          find downloads -type f -name "*.zip" -o -name "*.z*" | head -20
+          find downloads -type f \( -name "*.zip" -o -name "*.z*" -o -name "README.md" \) | head -20
           echo ""
           echo "========================================="
